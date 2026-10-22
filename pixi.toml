@@ -1,0 +1,16 @@
+[workspace]
+name = "cacert-scan"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+rust = ">=1.88,<2"
+pkg-config = ">=0.29,<1"
+openssl = ">=3,<4"
+
+[tasks]
+build = "cargo build --release"
+test = "cargo test"
+fmt = "cargo fmt --check"
+scan = "cargo run --release --"

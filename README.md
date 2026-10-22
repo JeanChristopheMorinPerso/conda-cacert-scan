@@ -1,8 +1,85 @@
-# nix-cacert-scan
+# cacert-scan
 
-Finds packages that carry their own CA trust store instead of using nixpkgs `cacert`.
+Finds Conda packages that carry their own CA trust store. The Rust scanner uses
+rattler to extract packages into temporary disk storage and scan their contents.
 
-## Usage
+## Conda Usage
+
+Development uses Pixi on macOS ARM64:
+
+```sh
+pixi install
+pixi run build
+pixi run test
+```
+
+Scan the latest packages in a channel:
+
+```sh
+pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --temp-dir ./scratch
+pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --include packages.txt --temp-dir ./scratch
+pixi run scan https://conda.anaconda.org/conda-forge --subdirs linux-64 noarch
+pixi run scan https://conda.anaconda.org/conda-forge --subdirs noarch --include packages.txt
+pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --jobs 8
+```
+
+The channel URL and `--subdirs` are both required and have no defaults. Supply a channel root
+URL and space- or comma-separated subdirectories, such as `--subdirs osx-arm64 noarch`
+or `--subdirs linux-64,noarch`.
+The scanner uses rattler's repodata gateway (including compressed repodata) and
+Conda version ordering to select the highest version per package name and
+subdirectory. All builds of that version are scanned, preferring `.conda` over a
+duplicate `.tar.bz2` build. Removed packages are excluded. No dependency solve is
+performed. Package scan failures are reported, scanning continues, and the final
+exit status is nonzero if any package failed.
+
+`--jobs N` sets the maximum concurrent package scans (default: 4; minimum: 1).
+Downloads, extraction, and certificate scanning run in parallel. Each worker uses
+its own private temporary directory. Progress includes the subdirectory, such as
+`[152/19434] osx-arm64/adtk-0.6.2-py310h2f386ee_1.conda`. Findings remain complete
+JSON Lines, but their order is nondeterministic when scans run in parallel.
+
+`--include FILE` limits discovery to exact package names, one per line:
+
+```text
+certifi
+openssl
+python
+```
+
+Names are case-insensitive; surrounding whitespace, blank lines, and duplicates
+are ignored. Version constraints and comments are not supported. An empty file
+selects no packages. Names missing from the selected subdirectories produce warnings.
+
+`--roots` and `--watch` default to `patterns/roots.pem` and `patterns/watch.pem`,
+and can also be set with `CACERT_SCAN_ROOTS` and `CACERT_SCAN_WATCH`.
+
+Output is JSON Lines, one finding per file, with `package` identifying the URL or
+local input and `file` identifying its package-relative path. Both metadata and
+payload files are scanned; symbolic links are not followed. Hard links extracted
+by rattler are scanned as regular files. Existing
+nested-archive and certificate detection is preserved.
+
+Both `.conda` and `.tar.bz2` packages are supported; HTTP range support is not
+required. Packages are downloaded completely before extraction. The CLI accepts
+a channel URL, not individual archives. There is no stdin archive input.
+
+`--temp-dir DIR` (or `CACERT_SCAN_TEMP_DIR`) selects the parent directory for
+temporary files, defaulting to the system temporary directory. The directory is
+created if needed. Each package gets a private subdirectory containing its
+download and extracted files, removed after scanning or on ordinary errors.
+Up to `--jobs` packages are stored at a time; allow enough disk space for their
+compressed archives and extracted contents. Memory use also scales with worker
+count. Abrupt termination can leave temporary files.
+
+Files larger than 1 GiB use the existing chunked scanner, which does not unpack
+nested archives inside those files. Smaller files and nested archives retain the
+scanner's existing memory and depth limits.
+
+The Nix batch scripts, reports, and usage below are historical. They are not
+compatible with this scanner's Conda CLI or its `package` output field.
+
+## Historical Nix Usage
 
 Scan the closure of your running system:
 
@@ -951,4 +1028,3 @@ Fix: Rebuild with a system-store option (rustls-native-certs, `--use-system-ca`,
 - [ ] **zotero** — `/lib/libxul.so` · trusts AAA
 - [ ] **zprint** — `/bin/zprint` · trusts AAA
 - [ ] **zrok** — `/bin/zrok` · trusts AAA
-
