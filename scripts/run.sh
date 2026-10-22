@@ -4,6 +4,7 @@
 set -euo pipefail
 . "$(dirname "$0")/env.sh"
 [ "$#" -ge 2 ] || { printf 'usage: run.sh OUTDIR CHANNEL --subdirs SUBDIR... [--include FILE] [--temp-dir DIR]\n' >&2; exit 2; }
+[[ $1 != -* && $2 == http*://* ]] || { printf 'usage: run.sh OUTDIR CHANNEL --subdirs SUBDIR... [--include FILE] [--temp-dir DIR]\n' >&2; exit 2; }
 out=$1; shift
 mkdir -p "$out"/{res,err,done,tmp}
 temp_dir=${CACERT_SCAN_TEMP_DIR:-$out/tmp}

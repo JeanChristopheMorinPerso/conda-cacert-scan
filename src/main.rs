@@ -19,6 +19,7 @@ const TRUST_STORE_HINT: usize = 3;
 const MAX_DEPTH: usize = 4;
 const MAX_UNPACKED: u64 = 1 << 30;
 const MIN_BARE_B64: usize = 600;
+const USER_AGENT: &str = concat!("cacert-scan/", env!("CARGO_PKG_VERSION"));
 // common store passwords seen in Java truststores; "" covers password-less PKCS12
 const P12_PASSWORDS: &[&str] = &["changeit", "", "changeme", "password", "secret", "123456", "truststore", "keystore", "notasecret"];
 
@@ -653,7 +654,7 @@ enum Command {
 }
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
     match args.command {
         Command::List { channel, subdirs, include, manifest } => {
             let include = include.as_deref().map(read_include).transpose()?;
@@ -794,12 +795,13 @@ mod tests {
                     if line == "\r\n" { break; }
                 }
                 assert!(!request.to_ascii_lowercase().contains("\r\nrange:"));
+                assert!(request.to_ascii_lowercase().contains(&format!("\r\nuser-agent: {USER_AGENT}\r\n")));
                 write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).unwrap();
                 socket.write_all(&bytes).unwrap();
             });
             let temp_dir = dir.path().join("scratch");
             let mut ctx = Ctx { m: &m, package: source.clone(), files: 0, bytes: 0, findings: 0 };
-            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let client = reqwest::Client::builder().user_agent(USER_AGENT).no_proxy().build().unwrap();
             scan_package(&mut ctx, &client, &source, &temp_dir).await.unwrap();
             server.join().unwrap();
             assert_eq!(ctx.files, 2);
@@ -963,11 +965,14 @@ mod tests {
                 let mut line = String::new();
                 std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
                 assert!(line.starts_with(&format!("GET /channel/osx-arm64/repodata.json{suffix} ")));
+                let mut user_agent_seen = false;
                 loop {
                     line.clear();
                     assert!(std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 0);
+                    if line.to_ascii_lowercase() == format!("user-agent: {USER_AGENT}\r\n") { user_agent_seen = true; }
                     if line == "\r\n" { break; }
                 }
+                assert!(user_agent_seen);
                 if suffix.is_empty() {
                     write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
                     socket.write_all(&body).unwrap();
@@ -977,7 +982,7 @@ mod tests {
             }
         });
         let include = BTreeSet::from(["certifi".into()]);
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = reqwest::Client::builder().user_agent(USER_AGENT).no_proxy().build().unwrap();
         let selected = channel_packages(&client, &source, &["osx-arm64".into()], Some(&include)).await.unwrap();
         server.join().unwrap();
         assert_eq!(selected.len(), 1);
