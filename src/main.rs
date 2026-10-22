@@ -1,6 +1,6 @@
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use base64::Engine;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rattler_conda_types::package::CondaArchiveType;
 use rattler_conda_types::{Channel, ChannelConfig, PackageName, RepoData, RepoDataRecord, Subdir};
 use rattler_networking::LazyClient;
@@ -531,7 +531,7 @@ fn latest_packages(records: Vec<RepoDataRecord>, include: Option<&BTreeSet<Strin
         if include.is_some_and(|names| !names.contains(&name)) { continue; }
         let group = groups.entry((name, record.package_record.subdir.clone())).or_default();
         if let Some(previous) = group.first() {
-            match record.package_record.version.cmp(&previous.package_record.version) {
+            match record.package_record.version.version().cmp(previous.package_record.version.version()) {
                 std::cmp::Ordering::Less => continue,
                 std::cmp::Ordering::Greater => group.clear(),
                 std::cmp::Ordering::Equal => {}
@@ -590,74 +590,91 @@ async fn channel_packages(
     Ok(selected)
 }
 
-#[derive(Parser)]
-#[command(
-    about = "Scan Conda packages for embedded CA trust stores using temporary disk storage"
-)]
-struct Args {
-    #[arg(long, env = "CACERT_SCAN_ROOTS", default_value = "patterns/roots.pem")]
-    roots: String,
-    #[arg(long, env = "CACERT_SCAN_WATCH", default_value = "patterns/watch.pem")]
-    watch: String,
-    /// Channel root URL.
-    channel: String,
-    /// File of package names to include, one name per line.
-    #[arg(long)]
-    include: Option<PathBuf>,
-    /// Channel subdirectories to scan (required for channel scans).
-    #[arg(long, num_args = 1.., value_delimiter = ',', required = true)]
-    subdirs: Vec<String>,
-    /// Parent directory for temporary downloads and extracted packages (defaults to system temp).
-    #[arg(long, env = "CACERT_SCAN_TEMP_DIR")]
-    temp_dir: Option<PathBuf>,
-    /// Maximum number of packages downloaded, extracted, and scanned concurrently.
-    #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(1..))]
-    jobs: u32,
+fn write_packages(out: &mut impl Write, packages: &[RepoDataRecord], manifest: bool) -> io::Result<()> {
+    for (i, record) in packages.iter().enumerate() {
+        if manifest {
+            writeln!(out, "{}\t{}\t{}/{}\t{}", i + 1, packages.len(), record.package_record.subdir, record.identifier.to_file_name(), record.url)?;
+        } else {
+            writeln!(out, "{}", record.url)?;
+        }
+    }
+    Ok(())
 }
 
-fn scan_packages(m: &Matcher, client: &reqwest::Client, packages: &[RepoDataRecord], temp_dir: &Path, jobs: usize) -> (u64, u64, u64, u64) {
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let runtime = tokio::runtime::Handle::current();
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..jobs.min(packages.len())).map(|_| {
-            let next = &next;
-            let runtime = &runtime;
-            scope.spawn(move || {
-                let mut ctx = Ctx { m, package: String::new(), files: 0, bytes: 0, findings: 0 };
-                let mut failed = 0;
-                loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(record) = packages.get(i) else { break; };
-                    let source = record.url.as_str();
-                    ctx.package = source.to_owned();
-                    eprintln!("[{}/{}] {}/{}", i + 1, packages.len(), record.package_record.subdir, record.identifier.to_file_name());
-                    if let Err(error) = runtime.block_on(scan_package(&mut ctx, client, source, temp_dir)) {
-                        failed += 1;
-                        eprintln!("error: {source}: {error}");
-                    }
-                }
-                (ctx.files, ctx.bytes, ctx.findings, failed)
-            })
-        }).collect();
-        workers.into_iter().map(|worker| worker.join().expect("package worker panicked"))
-            .fold((0, 0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3))
-    })
+fn package_url(source: &str) -> Result<String, String> {
+    let url = reqwest::Url::parse(source).map_err(|e| format!("invalid package URL: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("package URL must use HTTP or HTTPS".into());
+    }
+    if CondaArchiveType::try_from(Path::new(url.path())).is_none() {
+        return Err("unsupported package format: expected .conda or .tar.bz2".into());
+    }
+    Ok(source.to_owned())
+}
+
+#[derive(Parser)]
+#[command(
+    about = "List Conda package URLs or scan one package for embedded CA trust stores"
+)]
+struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// List latest package builds from a channel, one URL per line.
+    List {
+        /// HTTP or HTTPS channel root URL.
+        channel: String,
+        /// Channel subdirectories to list.
+        #[arg(long, required = true, num_args = 1.., value_delimiter = ',')]
+        subdirs: Vec<String>,
+        /// File of package names to include, one name per line.
+        #[arg(long)]
+        include: Option<PathBuf>,
+        /// Emit TSV (index, total, subdir/filename, URL) for batch workers.
+        #[arg(long)]
+        manifest: bool,
+    },
+    /// Scan one remote package using temporary disk storage.
+    Scan {
+        /// HTTP or HTTPS URL of one .conda or .tar.bz2 package.
+        #[arg(value_parser = package_url)]
+        url: String,
+        #[arg(long, env = "CACERT_SCAN_ROOTS", default_value = "patterns/roots.pem")]
+        roots: String,
+        #[arg(long, env = "CACERT_SCAN_WATCH", default_value = "patterns/watch.pem")]
+        watch: String,
+        /// Parent directory for temporary downloads and extracted packages (defaults to system temp).
+        #[arg(long, env = "CACERT_SCAN_TEMP_DIR")]
+        temp_dir: Option<PathBuf>,
+    },
 }
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let m = build_matcher(&std::fs::read(args.roots)?, &std::fs::read(args.watch)?);
     let client = reqwest::Client::builder().build()?;
-    let temp_dir = args.temp_dir.unwrap_or_else(std::env::temp_dir);
-    let include = args.include.as_deref().map(read_include).transpose()?;
-    let packages = channel_packages(&client, &args.channel, &args.subdirs, include.as_ref()).await?;
-    eprintln!("selected {} package builds; jobs={}", packages.len(), args.jobs);
-    let (files, bytes, findings, failed) = scan_packages(&m, &client, &packages, &temp_dir, args.jobs as usize);
-    eprintln!(
-        "files={} bytes={} findings={}",
-        files, bytes, findings
-    );
-    if failed > 0 { return Err(format!("{failed} package scans failed").into()); }
-    Ok(())
+    match args.command {
+        Command::List { channel, subdirs, include, manifest } => {
+            let include = include.as_deref().map(read_include).transpose()?;
+            let packages = channel_packages(&client, &channel, &subdirs, include.as_ref()).await?;
+            eprintln!("selected {} package builds", packages.len());
+            write_packages(&mut io::stdout().lock(), &packages, manifest)?;
+            Ok(())
+        }
+        Command::Scan { url, roots, watch, temp_dir } => {
+            let temp_dir = temp_dir.unwrap_or_else(std::env::temp_dir);
+            let m = build_matcher(&std::fs::read(roots)?, &std::fs::read(watch)?);
+            let mut ctx = Ctx { m: &m, package: url.clone(), files: 0, bytes: 0, findings: 0 };
+            eprintln!("{url}");
+            let result = scan_package(&mut ctx, &client, &url, &temp_dir).await;
+            eprintln!(
+                "files={} bytes={} findings={}",
+                ctx.files, ctx.bytes, ctx.findings
+            );
+            result
+        }
+    }
 }
 
 #[tokio::main]
@@ -792,31 +809,25 @@ mod tests {
     }
 
     #[test]
-    fn cli_requires_one_input_mode() {
+    fn cli_requires_exactly_one_package_url() {
+        let url = "https://example.com/noarch/fixture.conda";
         assert!(Args::try_parse_from(["cacert-scan"]).is_err());
-        assert!(Args::try_parse_from(["cacert-scan", "--nar", "label"]).is_err());
-        assert!(
-            Args::try_parse_from(["cacert-scan", "https://example.com/channel", "--path", "dir"]).is_err()
-        );
-        let args =
-            Args::try_parse_from(["cacert-scan", "https://example.com/channel", "--include", "names.txt", "--subdirs", "noarch"]).unwrap();
-        assert_eq!(args.channel, "https://example.com/channel");
-        assert_eq!(args.include, Some(PathBuf::from("names.txt")));
-        assert!(Args::try_parse_from(["cacert-scan", "--path", "dir", "--include", "names.txt"]).is_err());
-        assert!(Args::try_parse_from(["cacert-scan", "https://example.com/channel"]).is_err());
-        assert!(Args::try_parse_from(["cacert-scan", "https://example.com/channel", "--subdirs"]).is_err());
-        assert!(Args::try_parse_from(["cacert-scan", "--path", "dir"]).is_err());
-        assert!(Args::try_parse_from(["cacert-scan", "--subdirs", "noarch"]).is_err());
-        let args = Args::try_parse_from(["cacert-scan", "--temp-dir", "/tmp/scan", "https://example.com/channel", "--subdirs", "noarch"]).unwrap();
-        assert_eq!(args.temp_dir, Some(PathBuf::from("/tmp/scan")));
-        assert_eq!(args.jobs, 4);
-        assert!(Args::try_parse_from(["cacert-scan", "https://example.com/channel", "--subdirs", "noarch", "--jobs", "0"]).is_err());
-        assert_eq!(Args::try_parse_from(["cacert-scan", "https://example.com/channel", "--subdirs", "noarch", "--jobs", "2"]).unwrap().jobs, 2);
-        for values in [vec!["osx-arm64", "noarch"], vec!["osx-arm64,noarch"]] {
-            let mut command = vec!["cacert-scan", "https://example.com/channel", "--subdirs"];
-            command.extend(values);
-            assert_eq!(Args::try_parse_from(command).unwrap().subdirs, ["osx-arm64", "noarch"]);
+        assert!(Args::try_parse_from(["cacert-scan", "scan"]).is_err());
+        assert!(Args::try_parse_from(["cacert-scan", url]).is_err());
+        let Command::Scan { url: parsed, .. } = Args::try_parse_from(["cacert-scan", "scan", url]).unwrap().command else { panic!("expected scan"); };
+        assert_eq!(parsed, url);
+        assert!(Args::try_parse_from(["cacert-scan", "scan", "http://example.com/fixture.tar.bz2?token=abc"]).is_ok());
+        assert!(Args::try_parse_from(["cacert-scan", "scan", url, url]).is_err());
+        for source in ["fixture.conda", "/tmp/fixture.tar.bz2", "file:///tmp/fixture.conda", "ftp://example.com/fixture.conda", "https://example.com/channel", "http://"] {
+            assert!(Args::try_parse_from(["cacert-scan", "scan", source]).is_err(), "accepted {source}");
         }
+        for flag in ["--channel", "--subdirs", "--include", "--list", "--manifest", "--jobs", "--package", "--path", "--nar", "--stdin"] {
+            assert!(Args::try_parse_from(["cacert-scan", "scan", url, flag]).is_err(), "accepted {flag}");
+        }
+        let Command::Scan { roots, watch, temp_dir, .. } = Args::try_parse_from(["cacert-scan", "scan", url, "--roots", "roots.pem", "--watch", "watch.pem", "--temp-dir", "/tmp/scan"]).unwrap().command else { panic!("expected scan"); };
+        assert_eq!(roots, "roots.pem");
+        assert_eq!(watch, "watch.pem");
+        assert_eq!(temp_dir, Some(PathBuf::from("/tmp/scan")));
     }
 
     #[test]
@@ -830,6 +841,28 @@ mod tests {
         assert_eq!(json["package"], "fixture.conda");
         assert_eq!(json["file"], "bundle.pem");
         assert!(json.get("nar").is_none());
+    }
+
+    #[test]
+    fn cli_requires_channel_and_subdirs() {
+        assert!(Args::try_parse_from(["cacert-scan", "list"]).is_err());
+        assert!(Args::try_parse_from(["cacert-scan", "list", "https://example.com/channel"]).is_err());
+        assert!(Args::try_parse_from(["cacert-scan", "list", "--subdirs", "noarch"]).is_err());
+        assert!(Args::try_parse_from(["cacert-scan", "list", "https://example.com/channel", "--subdirs"]).is_err());
+        for values in [vec!["osx-arm64", "noarch"], vec!["osx-arm64,noarch"]] {
+            let mut command = vec!["cacert-scan", "list", "https://example.com/channel", "--include", "names.txt", "--subdirs"];
+            command.extend(values);
+            let Command::List { channel, subdirs, include, manifest } = Args::try_parse_from(command).unwrap().command else { panic!("expected list"); };
+            assert_eq!(channel, "https://example.com/channel");
+            assert_eq!(include, Some(PathBuf::from("names.txt")));
+            assert_eq!(subdirs, ["osx-arm64", "noarch"]);
+            assert!(!manifest);
+        }
+        let Command::List { manifest, .. } = Args::try_parse_from(["cacert-scan", "list", "https://example.com/channel", "--subdirs", "noarch", "--manifest"]).unwrap().command else { panic!("expected list"); };
+        assert!(manifest);
+        for flag in ["--list", "--package", "--jobs", "--roots", "--watch", "--temp-dir"] {
+            assert!(Args::try_parse_from(["cacert-scan", "list", "https://example.com/channel", "--subdirs", "noarch", flag]).is_err());
+        }
     }
 
     #[test]
@@ -870,7 +903,45 @@ mod tests {
         assert_eq!(selected.iter().map(|r| r.identifier.to_file_name()).collect::<Vec<_>>(), ["certifi-2.10-a_0.conda", "certifi-2.10-b_1.conda", "openssl-3.0-a_0.tar.bz2"]);
         let include = BTreeSet::from(["certifi".into()]);
         assert_eq!(latest_packages(records.clone(), Some(&include)).len(), 2);
-        assert!(latest_packages(records, Some(&BTreeSet::new())).is_empty());
+        assert!(latest_packages(records.clone(), Some(&BTreeSet::new())).is_empty());
+        let mut reversed = records.clone();
+        reversed.reverse();
+        reversed.extend(records.clone());
+        assert_eq!(latest_packages(reversed, None).iter().map(|r| r.identifier.to_file_name()).collect::<Vec<_>>(), selected.iter().map(|r| r.identifier.to_file_name()).collect::<Vec<_>>());
+        let mut other_subdir = records;
+        for record in &mut other_subdir { record.package_record.subdir = "linux-64".into(); }
+        let mut equivalent = selected[..2].to_vec();
+        let both = selected.into_iter().chain(other_subdir).collect();
+        assert_eq!(latest_packages(both, None).len(), 6);
+        equivalent[0].package_record.version = "1.0".parse().unwrap();
+        equivalent[1].package_record.version = "1.0.0".parse().unwrap();
+        assert_eq!(latest_packages(equivalent, None).len(), 2);
+    }
+
+    #[test]
+    fn listing_outputs_urls_or_manifest_columns() {
+        let repodata: RepoData = serde_json::from_value(repodata_fixture()).unwrap();
+        let channel = Channel::from_str("https://example.com/channel", &ChannelConfig::default_with_root_dir(std::env::current_dir().unwrap())).unwrap();
+        let selected = latest_packages(repodata.into_repo_data_records(&channel), None);
+        let mut out = Vec::new();
+        write_packages(&mut out, &selected, true).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), concat!(
+            "1\t3\tosx-arm64/certifi-2.10-a_0.conda\thttps://example.com/channel/osx-arm64/certifi-2.10-a_0.conda\n",
+            "2\t3\tosx-arm64/certifi-2.10-b_1.conda\thttps://example.com/channel/osx-arm64/certifi-2.10-b_1.conda\n",
+            "3\t3\tosx-arm64/openssl-3.0-a_0.tar.bz2\thttps://example.com/channel/osx-arm64/openssl-3.0-a_0.tar.bz2\n"
+        ));
+        let mut urls = Vec::new();
+        write_packages(&mut urls, &selected, false).unwrap();
+        assert_eq!(String::from_utf8(urls).unwrap(), concat!(
+            "https://example.com/channel/osx-arm64/certifi-2.10-a_0.conda\n",
+            "https://example.com/channel/osx-arm64/certifi-2.10-b_1.conda\n",
+            "https://example.com/channel/osx-arm64/openssl-3.0-a_0.tar.bz2\n"
+        ));
+        for manifest in [true, false] {
+            let mut empty = Vec::new();
+            write_packages(&mut empty, &[], manifest).unwrap();
+            assert!(empty.is_empty());
+        }
     }
 
     #[tokio::test]
@@ -914,54 +985,36 @@ mod tests {
         assert_eq!(selected[0].package_record.subdir, "osx-arm64");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn parallel_scans_overlap_and_clean_up_after_failure() {
+    #[test]
+    fn bash_runner_retries_and_resumes_saved_packages() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let archive = fixture(dir.path(), true);
-        let body = std::fs::read(archive).unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            let mut sockets = Vec::new();
-            // Neither response is sent until both workers have started their downloads.
-            while sockets.len() < 2 {
-                match listener.accept() {
-                    Ok((socket, _)) => sockets.push(socket),
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        assert!(std::time::Instant::now() < deadline, "package downloads did not overlap");
-                        std::thread::yield_now();
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            }
-            for mut socket in sockets {
-                socket.set_nonblocking(false).unwrap();
-                socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
-                let mut reader = BufReader::new(&socket);
-                loop {
-                    let mut line = String::new();
-                    assert!(std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 0);
-                    if line == "\r\n" { break; }
-                }
-                write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                socket.write_all(&body).unwrap();
-            }
-        });
-        let repodata: RepoData = serde_json::from_value(repodata_fixture()).unwrap();
-        let channel = Channel::from_str("https://example.com/channel", &ChannelConfig::default_with_root_dir(dir.path().to_owned())).unwrap();
-        let mut packages = latest_packages(repodata.into_repo_data_records(&channel), None);
-        packages.truncate(2);
-        for record in &mut packages { record.url = format!("http://{address}/{}", record.identifier.to_file_name()).parse().unwrap(); }
-        let mut broken = packages[0].clone();
-        broken.url = "http://127.0.0.1:1/broken.conda".parse().unwrap();
-        packages.push(broken);
-        let temp_dir = dir.path().join("scratch");
-        let m = build_matcher(include_bytes!("../patterns/roots.pem"), include_bytes!("../patterns/watch.pem"));
-        let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(10)).build().unwrap();
-        assert_eq!(scan_packages(&m, &client, &packages, &temp_dir, 2), (4, 2 * (2 + include_bytes!("../patterns/watch.pem").len() as u64), 2, 1));
-        server.join().unwrap();
-        assert_eq!(std::fs::read_dir(&temp_dir).unwrap().count(), 0);
+        let out = dir.path().join("results with spaces");
+        std::fs::create_dir(&out).unwrap();
+        let scanner = dir.path().join("mock scanner");
+        std::fs::write(&scanner, "#!/usr/bin/env bash\nset -eu\nif [ \"$1\" = list ]; then\n  [ \"$2\" = https://example.com/channel ] && [ \"$3\" = --subdirs ] && [ \"$4\" = noarch ] && [ \"$5\" = --manifest ]\n  [ ! -e \"$ALLOW.listed\" ] || exit 3\n  touch \"$ALLOW.listed\"\n  printf '1\\t2\\tnoarch/good.conda\\tgood\\n2\\t2\\tnoarch/bad.conda\\tbad\\n'\n  exit 0\nfi\n[ \"$1\" = scan ] || exit 2\ncase $2 in\n  good) [ ! -e \"$ALLOW.good\" ] || exit 3; touch \"$ALLOW.good\"; printf '{}\\n' ;;\n  bad) [ -e \"$ALLOW\" ] || { printf 'partial\\n'; exit 1; }; printf '{}\\n' ;;\n  *) exit 2 ;;\nesac\n").unwrap();
+        std::fs::set_permissions(&scanner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let invoke = |script: &str, selection: bool| {
+            let mut command = std::process::Command::new("bash");
+            command.arg(root.join("scripts").join(script)).arg(&out);
+            if selection { command.args(["https://example.com/channel", "--subdirs", "noarch"]); }
+            command.env("SCANNER", &scanner).env("JOBS", "2").env("ALLOW", dir.path().join("allow"))
+                .env_remove("CACERT_SCAN_TEMP_DIR").output().unwrap()
+        };
+        assert!(!invoke("run.sh", true).status.success());
+        assert!(dir.path().join("allow.listed").exists());
+        assert_eq!(std::fs::read_to_string(out.join("packages.tsv")).unwrap(), "1\t2\tnoarch/good.conda\tgood\n2\t2\tnoarch/bad.conda\tbad\n");
+        assert!(out.join("done/1").exists());
+        assert!(!out.join("done/2").exists());
+        assert_eq!(std::fs::read_to_string(out.join("res/2.jsonl")).unwrap(), "partial\n");
+        assert_eq!(std::fs::read_to_string(out.join("failed")).unwrap(), "2\t2\tnoarch/bad.conda\tbad\n");
+        std::fs::write(dir.path().join("allow"), b"").unwrap();
+        assert!(invoke("retry-failed.sh", false).status.success());
+        assert!(out.join("done/2").exists());
+        assert_eq!(std::fs::read_to_string(out.join("res/2.jsonl")).unwrap(), "{}\n");
+        assert!(!out.join("failed").exists());
+        assert!(invoke("run.sh", true).status.success());
     }
+
 }

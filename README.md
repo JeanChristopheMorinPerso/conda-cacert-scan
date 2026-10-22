@@ -13,31 +13,51 @@ pixi run build
 pixi run test
 ```
 
-Scan the latest packages in a channel:
+Scan the latest packages in a channel with the resumable Bash runner:
 
 ```sh
-pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --temp-dir ./scratch
-pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --include packages.txt --temp-dir ./scratch
-pixi run scan https://conda.anaconda.org/conda-forge --subdirs linux-64 noarch
-pixi run scan https://conda.anaconda.org/conda-forge --subdirs noarch --include packages.txt
-pixi run scan https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --jobs 8
+JOBS=8 pixi run bash scripts/run.sh out/conda-forge https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --temp-dir ./scratch
+JOBS=8 pixi run bash scripts/run.sh out/filtered https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --include packages.txt --temp-dir ./scratch
+pixi run scan list https://conda.anaconda.org/conda-forge --subdirs linux-64 noarch
+pixi run scan scan https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.19-hbd8a1cb_0.conda --temp-dir ./scratch
 ```
 
-The channel URL and `--subdirs` are both required and have no defaults. Supply a channel root
+For channel discovery, the channel URL and `--subdirs` are both required and have no defaults. Supply a channel root
 URL and space- or comma-separated subdirectories, such as `--subdirs osx-arm64 noarch`
 or `--subdirs linux-64,noarch`.
 The scanner uses rattler's repodata gateway (including compressed repodata) and
 Conda version ordering to select the highest version per package name and
 subdirectory. All builds of that version are scanned, preferring `.conda` over a
 duplicate `.tar.bz2` build. Removed packages are excluded. No dependency solve is
-performed. Package scan failures are reported, scanning continues, and the final
-exit status is nonzero if any package failed.
+performed. Bash runs individual package scans through `xargs -P`, continues after
+package failures, and returns nonzero if failures remain after retry.
 
-`--jobs N` sets the maximum concurrent package scans (default: 4; minimum: 1).
-Downloads, extraction, and certificate scanning run in parallel. Each worker uses
-its own private temporary directory. Progress includes the subdirectory, such as
-`[152/19434] osx-arm64/adtk-0.6.2-py310h2f386ee_1.conda`. Findings remain complete
-JSON Lines, but their order is nondeterministic when scans run in parallel.
+Rust scans sequentially. For parallel scans with persistent results, resume, and
+retry, use the Bash runner inside Pixi after building:
+
+```sh
+JOBS=8 pixi run bash scripts/run.sh out/conda-forge https://conda.anaconda.org/conda-forge --subdirs osx-arm64 noarch --include packages.txt --temp-dir ./scratch
+JOBS=8 pixi run bash scripts/retry-failed.sh out/conda-forge
+```
+
+`JOBS` controls the number of concurrent package processes (default: 4). The runner
+saves the artifact selection in `packages.tsv`, results in `res/INDEX.jsonl`,
+errors in `err/INDEX`, and successful completion markers in `done/INDEX`. It
+automatically retries unfinished packages once and exits nonzero if failures
+remain. Re-running the same command resumes the saved snapshot, skipping completed
+packages, without fetching channel repodata again. Use a new output directory to
+refresh the selection or change its arguments. `failed` contains failed artifact
+rows; `failed.prev` records the last retry batch. Only results with a matching
+`done/INDEX` marker are complete; failed scans can leave partial results. Do not
+run multiple runners/retries against the same output directory.
+
+Progress includes the subdirectory, such as
+`[152/19434] osx-arm64/adtk-0.6.2-py310h2f386ee_1.conda`. The artifact manifest is
+TSV with index, total, subdirectory/filename, and URL. The single `cacert-scan`
+command uses `list CHANNEL --subdirs ...` for rattler-based channel discovery,
+printing one URL per line. `list --manifest` emits the TSV used by the batch
+runner. `scan URL` scans exactly one package sequentially. `SCANNER` can override
+the executable path.
 
 `--include FILE` limits discovery to exact package names, one per line:
 
@@ -54,21 +74,25 @@ selects no packages. Names missing from the selected subdirectories produce warn
 `--roots` and `--watch` default to `patterns/roots.pem` and `patterns/watch.pem`,
 and can also be set with `CACERT_SCAN_ROOTS` and `CACERT_SCAN_WATCH`.
 
-Output is JSON Lines, one finding per file, with `package` identifying the URL or
-local input and `file` identifying its package-relative path. Both metadata and
+Scan output is JSON Lines, one finding per file, with `package` identifying the URL
+and `file` identifying its package-relative path. Both metadata and
 payload files are scanned; symbolic links are not followed. Hard links extracted
 by rattler are scanned as regular files. Existing
 nested-archive and certificate detection is preserved.
 
 Both `.conda` and `.tar.bz2` packages are supported; HTTP range support is not
 required. Packages are downloaded completely before extraction. The CLI accepts
-a channel URL, not individual archives. There is no stdin archive input.
+one package URL through `scan`, or a channel URL with `--subdirs` through `list`
+for discovery only.
+There is no local archive or stdin CLI input.
 
 `--temp-dir DIR` (or `CACERT_SCAN_TEMP_DIR`) selects the parent directory for
 temporary files, defaulting to the system temporary directory. The directory is
 created if needed. Each package gets a private subdirectory containing its
 download and extracted files, removed after scanning or on ordinary errors.
-Up to `--jobs` packages are stored at a time; allow enough disk space for their
+The batch runner defaults temporary storage to `OUTDIR/tmp`. Set
+`CACERT_SCAN_TEMP_DIR` when invoking standalone retries to reuse another temporary
+directory. Up to `JOBS` packages are stored at a time; allow enough disk space for their
 compressed archives and extracted contents. Memory use also scales with worker
 count. Abrupt termination can leave temporary files.
 
@@ -76,8 +100,9 @@ Files larger than 1 GiB use the existing chunked scanner, which does not unpack
 nested archives inside those files. Smaller files and nested archives retain the
 scanner's existing memory and depth limits.
 
-The Nix batch scripts, reports, and usage below are historical. They are not
-compatible with this scanner's Conda CLI or its `package` output field.
+The closure helper, analysis/report scripts, checked-in reports, and usage below
+are historical Nix workflows. The analysis scripts are not yet compatible with
+the Conda `package` output field; the batch runner and retry scripts above are ported.
 
 ## Historical Nix Usage
 
