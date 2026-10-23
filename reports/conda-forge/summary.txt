@@ -1,0 +1,28 @@
+packages scanned: 303573  failed: 79  findings: 11952
+cacert bundle hashes used to detect injected copies: 2
+fixture-or-other                 files=  5337 distinct-packages=  264
+keystore-no-known-roots          files=  3037 distinct-packages=   15
+compiled-in                      files=  1962 distinct-packages=  189
+vendored-pem-file                files=   777 distinct-packages=   64
+partial-root-set                 files=   304 distinct-packages=   24
+vendored-in-archive              files=   268 distinct-packages=   30
+has-emudhra-spki-blocklist       files=   189 distinct-packages=   44
+keystore-locked                  files=    29 distinct-packages=    2
+vendored-keystore                files=    24 distinct-packages=    5
+injected-copy                    files=    15 distinct-packages=    5
+system-cacert                    files=    10 distinct-packages=    1
+
+== vendored-pem-file: replace the file with the environment's ca-certificates bundle at $CONDA_PREFIX/ssl/cacert.pem (or point the program at it)
+   aliyun-python-sdk-core aliyun-python-sdk-core-v3 atlasgo awscli boto botocore ca-certificates-conda-aarch64 ca-certificates-conda-ppc64le ca-certificates-conda-x86_64 ca-certificates-cos6-x86_64 ca-certificates-cos7-aarch64 ca-certificates-cos7-ppc64le ca-certificates-cos7-x86_64 certifi cmder conan dotnet-sdk dsq facebook_business git git-annex go-core google-cloud-sdk grpcio gsoap gsutil httplib2 hyper hypertemp ibm-cos-sdk-core iterativewgcna jupyter-sphinx k6 ldc libgrpc m2-ca-certificates m2w64-ca-certificates nodejs nsight-compute nsight-systems nsight-systems-cli openai pex pgadmin4-desktop pigar pip plotly-orca podman-desktop pypy2.7 qca r-openssl r-rcurl r-rsconnect raven rb-aws-codedeploy-agent rb-aws-sdk-core rpaframework sing-box stripe transifex-client wakatime wassima windninja ydb
+
+== vendored-in-archive: inject: patch the bundle inside the wheel/jar at build time, or patch the code to use the system store
+   apache-solr bazel cromwell google-cloud-sdk graalpy gradle h2o-py inspect-ai nsight-compute nsight-systems nsight-systems-cli openrefine presto-server pybuilder pypy2.7 pypy3.5 pypy3.6 pypy3.7 pypy3.8 pypy3.9 pyserini r-h2o radical.pilot rb-aws-codedeploy-agent rb-aws-sdk-core renode-cli scijava-jupyter-kernel stim trino-server virtualenv
+
+== vendored-keystore: generate the keystore from the environment's ca-certificates bundle using keytool, or use the environment's trust store
+   ca-certificates-cos6-x86_64 cmder git graalpy openjdk
+
+== compiled-in: cannot inject a file: rebuild with an environment/system-store option or update the embedded root bundle
+   agent-browser aichat aqua artem aube baml-py bazel biomcp biome boast bun caddy cargo-edit cargo-flamegraph cargo-make cargo-nextest cargo-vet ccusage claude-agent-acp cmsis-pack-manager cocoindex code-server codebook-lsp codex colgrep conda_curation connectorx css_inline dask-sql datui deno dioxus dora-cli dora-rs dprint dra dsq dttlib ducklake-sdk dumbpipe fastpotify firefox fnm fnox fresh-editor fselect geolibre getdaft gflow git-cliff go-cockroach goose-cli goose-server impit ink-md ironclaw k6 kache kaleido-core keygen-py leaf-markdown-viewer lean-ctx librerun-sdk libzenohc litellm litestream livekit lumen-diff lumen-tui lune lyric-py marimo maturin md-tui meilisearch mise moonrepo-moon mq-bridge-app mq-bridge-py nbin netwatch nodejs nono nsight-compute nsight-systems nss nss-conda-aarch64 nss-conda-ppc64le nss-conda-x86_64 nss-cos6-x86_64 nss-cos7-aarch64 nss-cos7-ppc64le nss-cos7-x86_64 nu_plugin_connectorx numa numbat nushell obscura openai-harmony opendal ormdantic outlines-core paks panda3d parceljs pdf-inspector peprs pgadmin4-desktop pineappl pixi pixi-mise pixi-outdated pixi-policy pixi-sbom pixi-unpack pnpm podman-desktop prefligit prek primp py-pixi-build-backend pydantic-monty pydantic-monty-client pyrudof python-chromedriver-binary python-patinae qcs-api-client-common qcs-sdk-python qcs-sdk-python-grpc-web qsv qt-webengine qt6-webengine rainfrog rerun-sdk rig rill rotz rtk-cli rudof rune runpodctl rustfits rustfs rustfs-cli rustywind sagemaker-code-editor samply satkit schema-engine-cli selene sendme sing-box snapper-fmt stacrs stakpak syncpack taplo taskwarrior tauri tealdeer television tensorboard-data-server the-way tinymist tirith topiary tree-sitter-language-pack trunk turborepo typst-lsp uiua undoc uniclip unpdf-rs uv vegafusion vegafusion-python-embed vercel-cli vl-convert vl-convert-python wasm-bindgen-cli wasm-pack wasmtime-py zed zen-engine zenohd zensical zerobrew zola
+
+== vendored-other: inspect
+   
