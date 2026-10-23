@@ -602,7 +602,13 @@ fn write_packages(out: &mut impl Write, packages: &[RepoDataRecord], manifest: b
     Ok(())
 }
 
-fn package_url(source: &str) -> Result<String, String> {
+fn package_source(source: &str) -> Result<String, String> {
+    if !source.contains("://") {
+        if CondaArchiveType::try_from(Path::new(source)).is_none() {
+            return Err("unsupported package format: expected .conda or .tar.bz2".into());
+        }
+        return Ok(source.to_owned());
+    }
     let url = reqwest::Url::parse(source).map_err(|e| format!("invalid package URL: {e}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err("package URL must use HTTP or HTTPS".into());
@@ -638,10 +644,10 @@ enum Command {
         #[arg(long)]
         manifest: bool,
     },
-    /// Scan one remote package using temporary disk storage.
+    /// Scan one remote or local package using temporary disk storage.
     Scan {
-        /// HTTP or HTTPS URL of one .conda or .tar.bz2 package.
-        #[arg(value_parser = package_url)]
+        /// HTTP/HTTPS URL or local path of one .conda or .tar.bz2 package.
+        #[arg(value_parser = package_source, value_name = "URL_OR_PATH")]
         url: String,
         #[arg(long, env = "CACERT_SCAN_ROOTS", default_value = "patterns/roots.pem")]
         roots: String,
@@ -811,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_requires_exactly_one_package_url() {
+    fn cli_requires_exactly_one_package_source() {
         let url = "https://example.com/noarch/fixture.conda";
         assert!(Args::try_parse_from(["cacert-scan"]).is_err());
         assert!(Args::try_parse_from(["cacert-scan", "scan"]).is_err());
@@ -820,7 +826,11 @@ mod tests {
         assert_eq!(parsed, url);
         assert!(Args::try_parse_from(["cacert-scan", "scan", "http://example.com/fixture.tar.bz2?token=abc"]).is_ok());
         assert!(Args::try_parse_from(["cacert-scan", "scan", url, url]).is_err());
-        for source in ["fixture.conda", "/tmp/fixture.tar.bz2", "file:///tmp/fixture.conda", "ftp://example.com/fixture.conda", "https://example.com/channel", "http://"] {
+        for source in ["fixture.conda", "/tmp/fixture.tar.bz2", "./folder with spaces/fixture.conda"] {
+            let Command::Scan { url: parsed, .. } = Args::try_parse_from(["cacert-scan", "scan", source]).unwrap().command else { panic!("expected scan"); };
+            assert_eq!(parsed, source);
+        }
+        for source in ["fixture.zip", "file:///tmp/fixture.conda", "ftp://example.com/fixture.conda", "https://example.com/channel", "http://"] {
             assert!(Args::try_parse_from(["cacert-scan", "scan", source]).is_err(), "accepted {source}");
         }
         for flag in ["--channel", "--subdirs", "--include", "--list", "--manifest", "--jobs", "--package", "--path", "--nar", "--stdin"] {

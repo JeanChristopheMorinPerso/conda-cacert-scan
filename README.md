@@ -60,7 +60,7 @@ Progress includes the subdirectory, such as
 TSV with index, total, subdirectory/filename, and URL. The single `cacert-scan`
 command uses `list CHANNEL --subdirs ...` for rattler-based channel discovery,
 printing one URL per line. `list --manifest` emits the TSV used by the batch
-runner. `scan URL` scans exactly one package sequentially. `SCANNER` can override
+runner. `scan URL_OR_PATH` scans exactly one package sequentially. `SCANNER` can override
 the executable path.
 
 `--include FILE` limits discovery to exact package names, one per line:
@@ -78,7 +78,7 @@ selects no packages. Names missing from the selected subdirectories produce warn
 `--roots` and `--watch` default to `patterns/roots.pem` and `patterns/watch.pem`,
 and can also be set with `CACERT_SCAN_ROOTS` and `CACERT_SCAN_WATCH`.
 
-Scan output is JSON Lines, one finding per file, with `package` identifying the URL
+Scan output is JSON Lines, one finding per file, with `package` identifying the URL or local path
 and `file` identifying its package-relative path. Both metadata and
 payload files are scanned; symbolic links are not followed. Hard links extracted
 by rattler are scanned as regular files. Existing
@@ -86,9 +86,15 @@ nested-archive and certificate detection is preserved.
 
 Both `.conda` and `.tar.bz2` packages are supported; HTTP range support is not
 required. Packages are downloaded completely before extraction. The CLI accepts
-one package URL through `scan`, or a channel URL with `--subdirs` through `list`
+one package URL or local `.conda`/`.tar.bz2` path through `scan`, or a channel URL with `--subdirs` through `list`
 for discovery only.
-There is no local archive or stdin CLI input.
+Local archives are extracted directly without copying or deleting the original:
+
+```sh
+pixi run scan scan ./package.conda --temp-dir ./scratch
+```
+
+There is no stdin CLI input.
 
 `--temp-dir DIR` (or `CACERT_SCAN_TEMP_DIR`) selects the parent directory for
 temporary files, defaulting to the system temporary directory. The directory is
