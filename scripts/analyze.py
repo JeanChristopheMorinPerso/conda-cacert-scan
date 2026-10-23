@@ -1,5 +1,6 @@
 """usage: analyze.py OUTDIR REPORTDIR — aggregate cacert-scan findings into per-package injection candidates."""
 import json, os, re, sys, csv, collections
+from urllib.parse import urlsplit
 
 out, rep = sys.argv[1], sys.argv[2]
 os.makedirs(rep, exist_ok=True)
@@ -7,31 +8,33 @@ os.makedirs(rep, exist_ok=True)
 TRUST_STORE_MIN = 20
 EMSIGN_PATH_ROOT = "emSign ECC Root CA - G3"
 
-def pname(storepath):
-    return re.sub(r"^/nix/store/[a-z0-9]{32}-", "", storepath)
+def pname(url):
+    return re.sub(r"\.(conda|tar\.bz2)$", "", "/".join(urlsplit(url).path.rsplit("/", 2)[-2:]))
 
-def rel(f, nar):
-    return f[len(nar):] or "/"
+def base(name):
+    return name.rsplit("/", 1)[-1].rsplit("-", 2)[0]
 
 findings = []
 for fn in os.listdir(f"{out}/res"):
+    if not fn.endswith(".jsonl") or not os.path.exists(f"{out}/done/{fn[:-6]}"):
+        continue
     with open(f"{out}/res/{fn}") as fh:
         for line in fh:
             findings.append(json.loads(line))
 
 cacert_hashes = {f["sha256"] for f in findings
-                 if re.search(r"-nss-cacert-[^/]*$", f["nar"]) and f.get("sha256") and len(f["known_roots"]) >= TRUST_STORE_MIN}
+                 if base(pname(f["package"])) == "ca-certificates" and f.get("sha256") and len(f["known_roots"]) >= TRUST_STORE_MIN}
 
 def classify(f):
     roots = len(f["known_roots"])
     archive = "!" in f["file"]
     elf = f.get("magic") == "elf"
     fmts = set(f["formats"])
+    if roots >= TRUST_STORE_MIN and base(pname(f["package"])) == "ca-certificates":
+        return "system-cacert"
     if f.get("sha256") in cacert_hashes:
         return "injected-copy"
     if roots >= TRUST_STORE_MIN:
-        if re.search(r"-nss-cacert-|-cacert-", f["nar"]):
-            return "system-cacert"
         if archive:
             return "vendored-in-archive"
         if f.get("magic") in ("jks", "jceks", "pkcs12"):
@@ -50,10 +53,10 @@ def classify(f):
     return "fixture-or-other"
 
 FIX = {
-    "vendored-pem-file": "inject: replace the file with a symlink to ${cacert}/etc/ssl/certs/ca-bundle.crt (or point the program at it)",
+    "vendored-pem-file": "replace the file with the environment's ca-certificates bundle at $CONDA_PREFIX/ssl/cacert.pem (or point the program at it)",
     "vendored-in-archive": "inject: patch the bundle inside the wheel/jar at build time, or patch the code to use the system store",
-    "vendored-keystore": "inject: Generate the keystore from ${cacert}/etc/ssl/certs/ca-bundle.crt at build time with jre-generate-cacerts, as openjdk does. cacert has no Java keystore output.",
-    "compiled-in": "cannot inject a file: rebuild with a system-store option (rustls-native-certs / --use-system-ca / NSS from cacert) or bump the embedded root crate",
+    "vendored-keystore": "generate the keystore from the environment's ca-certificates bundle using keytool, or use the environment's trust store",
+    "compiled-in": "cannot inject a file: rebuild with an environment/system-store option or update the embedded root bundle",
     "vendored-other": "inspect",
 }
 
@@ -66,8 +69,8 @@ for f in findings:
 with open(f"{rep}/findings.tsv", "w", newline="") as fh:
     w = csv.writer(fh, delimiter="\t")
     w.writerow(["class", "package", "path", "magic", "formats", "pem_certs", "known_roots", "ecc_g3", "aaa_anchor", "emudhra_roots", "compromised_ca", "spki_hash", "sha256"])
-    for f in sorted(rows, key=lambda f: (f["class"], pname(f["nar"]), f["file"])):
-        w.writerow([f["class"], pname(f["nar"]), rel(f["file"], f["nar"]), f.get("magic") or "", ",".join(f["formats"]),
+    for f in sorted(rows, key=lambda f: (f["class"], pname(f["package"]), f["file"])):
+        w.writerow([f["class"], pname(f["package"]), f["file"], f.get("magic") or "", ",".join(f["formats"]),
                     f["pem_certs"], len(f["known_roots"]), int(EMSIGN_PATH_ROOT in f["watch"]),
                     int("AAA Certificate Services" in f["watch"]),
                     ",".join(w for w in f["watch"] if w.startswith("emSign")),
@@ -78,14 +81,11 @@ pkgs = collections.defaultdict(lambda: {"classes": collections.Counter(), "files
 for f in rows:
     if f["class"] not in FIX:
         continue
-    p = pkgs[pname(f["nar"])]
+    p = pkgs[pname(f["package"])]
     p["classes"][f["class"]] += 1
-    p["files"].append(rel(f["file"], f["nar"]))
+    p["files"].append(f["file"])
     p["ecc_g3"] |= EMSIGN_PATH_ROOT in f["watch"]
     p["aaa"] |= "AAA Certificate Services" in f["watch"]
-
-def base(name):
-    return re.sub(r"-[0-9][^-]*(-[a-z]+)?$", "", name)
 
 with open(f"{rep}/packages.tsv", "w", newline="") as fh:
     w = csv.writer(fh, delimiter="\t")
@@ -96,12 +96,14 @@ with open(f"{rep}/packages.tsv", "w", newline="") as fh:
 
 done = len(os.listdir(f"{out}/done"))
 failed = open(f"{out}/failed").read().splitlines() if os.path.exists(f"{out}/failed") else []
+failed = {line.split("\t", 1)[0] for line in failed if line.strip()}
+failed = {index for index in failed if not os.path.exists(f"{out}/done/{index}")}
 cls = collections.Counter(f["class"] for f in rows)
 bases = collections.defaultdict(set)
 for f in rows:
-    bases[f["class"]].add(base(pname(f["nar"])))
+    bases[f["class"]].add(base(pname(f["package"])))
 with open(f"{rep}/summary.txt", "w") as fh:
-    print(f"nars scanned: {done}  failed: {len(failed)}  findings: {len(rows)}", file=fh)
+    print(f"packages scanned: {done}  failed: {len(failed)}  findings: {len(rows)}", file=fh)
     print(f"cacert bundle hashes used to detect injected copies: {len(cacert_hashes)}", file=fh)
     for c, n in cls.most_common():
         print(f"{c:32s} files={n:6d} distinct-packages={len(bases.get(c, ())):5d}", file=fh)
