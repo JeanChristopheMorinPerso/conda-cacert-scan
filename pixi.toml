@@ -2,7 +2,7 @@
 name = "cacert-scan"
 version = "0.1.0"
 channels = ["conda-forge"]
-platforms = ["osx-arm64"]
+platforms = ["osx-arm64", "linux-64"]
 
 [dependencies]
 rust = ">=1.88,<2"

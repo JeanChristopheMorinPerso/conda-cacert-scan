@@ -126,6 +126,7 @@ osquery-5.23.1   /share/osquery/certs/certs.pem   135 roots   ECC G3,AAA
 Add `--json` for the raw scanner output (one JSON object per file). To scan a directory without its closure, use `nix shell github:zimbatm/nix-cacert-scan -c cacert-scan --path DIR`.
 
 On 2026-10-18/19, eMudhra and Sectigo revoked the certificates of eight eMudhra intermediates as compromised (cACompromise in CCADB).
+On 2026-11-07, eMudhra revoked eight more RSA intermediates (`EM DV/OV/EV TLS CA - G2B/G2C` and `EM OV CS CA - G2B/G2C`) with `cessationOfOperation`, because the same April 2025 key-handling script had copied their private keys through host memory. They chain to `emSign Root TLS CA - G1` and `emSign Root CS CA - G2`; all 24 revoked intermediates are in `watch.pem`.
 A package with its own trust store does not get root-store updates from `cacert`.
 Each package below must be patched to use `cacert`, or rebuilt.
 

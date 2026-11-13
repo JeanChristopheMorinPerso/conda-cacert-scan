@@ -25,7 +25,7 @@ The scanner reads each file once and checks all of these:
 
 Patterns:
 - `roots.pem`: 499 roots. These are the CCADB Mozilla included roots plus older bundles, so stale vendored copies still match.
-- `watch.pem`: the eMudhra roots, `emSign Root TLS CA - G3`, `AAA Certificate Services`, and the 16 revoked eMudhra/Sectigo intermediates.
+- `watch.pem`: the eMudhra roots, the `emSign Root TLS/CS CA` issuers on the G1 and G3 paths, `AAA Certificate Services`, and the 24 revoked eMudhra/Sectigo intermediates (16 ECDSA G3 on 2026-10-18/19, 8 RSA G2 on 2026-11-07).
 - `tools/mkpatterns.py` regenerates both files from CCADB.
 
 A file counts as a trust store when it contains ≥20 distinct known roots.

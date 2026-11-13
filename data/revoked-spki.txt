@@ -14,3 +14,11 @@ ebed6475c2c2d80fcb199f3fe8dd6e6b3ce60b77eb15d4e42c3dec0c6f5b5105 eMudhra Tech EM
 ebed6475c2c2d80fcb199f3fe8dd6e6b3ce60b77eb15d4e42c3dec0c6f5b5105 Sectigo EM DV TLS CA - G3B <- AAA Certificate Services
 ec4ffa1ad0ac88081314b7aaffef6a91f97cd57291bb5ba686c5415f5eb4f6b6 eMudhra Tech EM OV CS CA - G3B <- emSign Root CS CA - G3
 ec4ffa1ad0ac88081314b7aaffef6a91f97cd57291bb5ba686c5415f5eb4f6b6 Sectigo EM OV CS CA - G3B <- AAA Certificate Services
+04db3b7ddf683b1d4b5b64fe743a3a8d8c3d71f0c339d7dc25b343e665a9eb5b eMudhra Tech EM DV TLS CA - G2B <- emSign Root TLS CA - G1
+34556838281688d1c967d43d1372a1bbaf389277222f03e1017b18b348a1f00e eMudhra Tech EM DV TLS CA - G2C <- emSign Root TLS CA - G1
+8429351035ba90ba14ef3f7ae38ca35480605a0296aa6c263c6a9b26bb9a48e1 eMudhra Tech EM OV TLS CA - G2B <- emSign Root TLS CA - G1
+aa4216dc80a7299ae6de08444bea2c588dc873631ebc563c0776d83a1b61e3ce eMudhra Tech EM OV TLS CA - G2C <- emSign Root TLS CA - G1
+c2690b6bf35a9364e697735ec630bfd9d2cd59040e3908a66765168e3282b04e eMudhra Tech EM EV TLS CA - G2B <- emSign Root TLS CA - G1
+1a942e3925b809896b4b291a8cd2e7bc5f1d533aa523b8353b2df377b0f0adbe eMudhra Tech EM EV TLS CA - G2C <- emSign Root TLS CA - G1
+0169613548123dab14afffcb5a3f0e804c70ac903f29ecad55ed43dc75f13881 eMudhra Tech EM OV CS CA - G2B <- emSign Root CS CA - G2
+c073efb31422ff4db99dc24d7442438e942c73cd3c61b529a8ba32542e946b86 eMudhra Tech EM OV CS CA - G2C <- emSign Root CS CA - G2
