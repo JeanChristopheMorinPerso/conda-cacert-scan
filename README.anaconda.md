@@ -5,6 +5,8 @@ channel. It downloads every latest-version artifact in the selected subdirs,
 extracts it, and reports files that carry their own CA trust store, including
 stores that still trust the revoked eMudhra/Sectigo paths.
 
+Use a PBP dev instance type `z1d.6xlarge`.
+
 Build the scanner once:
 
 ```sh
@@ -15,9 +17,9 @@ Run the resumable batch scanner. `JOBS` sets package-level parallelism; temporar
 archives and extracted files go under the output directory by default.
 
 ```sh
-JOBS=8 pixi run bash scripts/run.sh out/anaconda-main \
+JOBS=24 pixi run bash scripts/run.sh out/anaconda-main \
   https://repo.anaconda.com/pkgs/main \
-  --subdirs noarch linux-64 linux-aarch64 osx-64 osx-arm64 win-64 win-arm64
+  --subdirs noarch linux-64 linux-aarch64 osx-arm64 win-64 win-arm64
 ```
 
 Re-running the same command resumes: completed artifacts are skipped from
